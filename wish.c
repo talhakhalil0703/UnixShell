@@ -180,6 +180,11 @@ static void customCommand(char ** tokens, size_t token_count){
     }
 
     if (redirect_token_pos != token_count) {
+        if (redirect_token_pos != token_count-2){
+            // More than one file on the right side of the redirection operator
+            ERORR_OCCURED = true;
+            return;
+        }
         redirect_stream_path = tokens[token_count-1];
     }
 
