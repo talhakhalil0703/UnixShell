@@ -4,6 +4,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdarg.h>
+#include <sys/wait.h>
+#include <sys/types.h>
 
 #define DELIM " "
 
@@ -77,6 +79,33 @@ static size_t extractTokens(char *line, char ***tokens_ptr)
     return token_count;
 }
 
+static void launchApplication(char *app_path, char **tokens, size_t token_count)
+{
+    // Create args
+    char **args = malloc(sizeof(char *) * (token_count+1));
+    for (int i = 0; i < token_count; i++)
+    {
+        args[i] = (char *)malloc(sizeof(char) * (strlen(tokens[i]) + 1));
+        strcpy(args[i], tokens[i]);
+    }
+    args[token_count] = NULL;
+    DEBUG_PRINT("Launched application\n");
+    pid_t id = fork();
+    if (id == 0){
+        execv(app_path, args);
+    } else if (id > 0) {
+        waitpid(id, NULL, 0);
+    } else {
+        error();
+    }
+    //Memory leak if not addressed...
+    for (int i = 0; i < token_count; i++)
+    {
+        free(args[i]);
+    }
+    free(args);
+}
+
 static bool executeCommands(char **tokens, size_t token_count)
 {
     if (token_count == 1 && !strcmp(tokens[0], "exit"))
@@ -95,30 +124,13 @@ static bool executeCommands(char **tokens, size_t token_count)
         char *app_path = (char *)malloc(sizeof(char) * (len_of_path + len_of_token + 2));
         DEBUG_PRINT("Allocated Memory for App Path \n");
         strcpy(app_path, PATH);
-        DEBUG_PRINT("App Path %s\n", app_path);
         strcat(app_path, "/");
         strcat(app_path, tokens[0]);
         DEBUG_PRINT("Created App Path: %s\n", app_path);
         if (access(app_path, F_OK) == 0)
         {
+            launchApplication(app_path,tokens, token_count);
             DEBUG_PRINT("App path exists \n");
-            // App path does indeed exist
-            // Create args
-            char **args = malloc(sizeof(char *) * token_count);
-            for (int i = 0; i < token_count - 1; i++)
-            {
-                args[i] = (char *)malloc(sizeof(char) * (strlen(tokens[i + 1]) + 1));
-                strcpy(args[i], tokens[i + 1]);
-            }
-            args[token_count-1] = NULL;
-            DEBUG_PRINT("Launched application\n");
-            ssize_t rc = execv(app_path, args);
-            DEBUG_PRINT("Returned from application %ld\n", rc);
-            for (int i = 0; i < token_count - 1; i++)
-            {
-                free(args[i]);
-            }
-            free(args);
         }
         else
         {
