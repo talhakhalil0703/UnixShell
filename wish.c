@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 #define DELIM " "
-
+#define REDIRECTION_OPERATOR ">"
 #ifdef DEBUG
 #define DEBUG_PRINT(fmt, ...)                \
     do                                       \
@@ -63,10 +63,10 @@ static FILE *_openFile(char *file_name, char *opt)
 static size_t extractTokens(char *line, char ***tokens_ptr)
 {
     char **tokens = *tokens_ptr;
-    char *token_line = line;
+    char *line_ptr = line;
     char *token = NULL;
     size_t token_count = 0;
-    while ((token = strsep(&token_line, DELIM)) != NULL)
+    while ((token = strsep(&line_ptr, DELIM)) != NULL)
     {
         token_count += 1;
         tokens = (char **)realloc(tokens, sizeof(char *) * (token_count));
@@ -76,13 +76,12 @@ static size_t extractTokens(char *line, char ***tokens_ptr)
         tokens[token_count - 1] = strsep(&tokens[token_count - 1], "\t");
         DEBUG_PRINT("READ TOKEN: %s\n", tokens[token_count - 1]);
     }
-    free(token_line);
     free(token);
     *tokens_ptr = tokens;
     return token_count;
 }
 
-static void launchApplication(char *app_path, char **tokens, size_t token_count)
+static void launchApplication(char *app_path, char **tokens, size_t token_count, char * output_stream_path)
 {
     // Create args
     char **args = malloc(sizeof(char *) * (token_count + 1));
@@ -96,6 +95,10 @@ static void launchApplication(char *app_path, char **tokens, size_t token_count)
     pid_t id = fork();
     if (id == 0)
     {
+        if (output_stream_path != NULL){
+            freopen(output_stream_path, "w", stdout);
+            freopen(output_stream_path, "w", stderr);
+        }
         execv(app_path, args);
     }
     else if (id > 0)
@@ -159,6 +162,29 @@ static void builtInCd(char **tokens, size_t token_count)
 }
 
 static void customCommand(char ** tokens, size_t token_count){
+    //Count the number od redirect operators, if greater than 1 error
+    size_t redirect_count = 0;
+    ssize_t redirect_token_pos = token_count;
+    char * redirect_stream_path = NULL;
+    for (size_t i = 0; i < token_count; i++)
+    {
+        if (!strcmp(tokens[i], REDIRECTION_OPERATOR)){
+            redirect_count += 1;
+            redirect_token_pos = i;
+        }
+    }
+
+    if (redirect_count > 1) {
+        ERORR_OCCURED = true;
+        return;
+    }
+
+    if (redirect_token_pos != token_count) {
+        redirect_stream_path = tokens[token_count-1];
+    }
+
+    //Using the count limit the command amount run
+    //Redirect can be done in launcApplication
     char *temp_path = malloc((strlen(PATH) + 1) * sizeof(char));
     temp_path = strcpy(temp_path, PATH);
     char *temp_ptr = temp_path;
@@ -182,7 +208,7 @@ static void customCommand(char ** tokens, size_t token_count){
         if (access(app_path, X_OK) == 0)
         {
             DEBUG_PRINT("App path exists \n");
-            launchApplication(app_path, tokens, token_count);
+            launchApplication(app_path, tokens, redirect_token_pos, redirect_stream_path);
             command_ran = true;
         }
         free(app_path);
