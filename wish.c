@@ -104,13 +104,16 @@ static bool executeCommands(char **tokens, size_t token_count)
             DEBUG_PRINT("App path exists \n");
             // App path does indeed exist
             // Create args
-            char **args = malloc(sizeof(char *) * token_count - 1);
+            char **args = malloc(sizeof(char *) * token_count);
             for (int i = 0; i < token_count - 1; i++)
             {
                 args[i] = (char *)malloc(sizeof(char) * (strlen(tokens[i + 1]) + 1));
                 strcpy(args[i], tokens[i + 1]);
             }
-            execv(app_path, args);
+            args[token_count-1] = NULL;
+            DEBUG_PRINT("Launched application\n");
+            ssize_t rc = execv(app_path, args);
+            DEBUG_PRINT("Returned from application %ld\n", rc);
             for (int i = 0; i < token_count - 1; i++)
             {
                 free(args[i]);
