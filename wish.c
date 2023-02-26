@@ -25,6 +25,8 @@ static char *PATH = NULL;
 // static bool ERORR_OCCURED = false;
 
 static FILE *INPUT_STREAM = NULL;
+static pid_t * PIDS_TO_WAIT_FOR = NULL;
+static size_t PIDS_TO_WAIT_FOR_COUNT = 0;
 
 #ifdef DEBUG
 static void printTokens(char **tokens, size_t token_count)
@@ -92,7 +94,7 @@ static size_t extractTokens(char *line, char ***tokens_ptr)
         char *token = NULL;
         while ((token = strsep(&line_ptr, DELIM)) != NULL)
         {
-            if (!strcmp(token, "")) continue;
+            if (!strcmp(token, "") || !strcmp(token, "\n")) continue;
             token_count += 1;
             tokens = (char **)realloc(tokens, sizeof(char *) * (token_count));
             tokens[token_count - 1] = (char *)malloc(sizeof(char) * strlen(token) + 1);
@@ -141,7 +143,9 @@ static void launchApplication(char *app_path, char **tokens, size_t token_count,
     }
     else if (id > 0)
     {
-        waitpid(id, NULL, 0);
+        PIDS_TO_WAIT_FOR_COUNT++;
+        PIDS_TO_WAIT_FOR = realloc(PIDS_TO_WAIT_FOR,sizeof(pid_t)*PIDS_TO_WAIT_FOR_COUNT);
+        PIDS_TO_WAIT_FOR[PIDS_TO_WAIT_FOR_COUNT-1] = id;
     }
     else
     {
@@ -276,6 +280,7 @@ static void customCommand(char **tokens, size_t token_count)
 
 static bool executeCommands(char **tokens, size_t token_count)
 {
+    if (token_count == 0) return false;
     if (!strcmp(tokens[0], "exit"))
     {
         if (token_count > 1)
@@ -324,12 +329,18 @@ static void shellLoop()
 #endif
             DEBUG_PRINT("Tokens Generated\n");
             exit_program += executeCommands(tokens, token_count);
+
             for (int i = 0; i < token_count; i++)
             {
                 free(tokens[i]);
             }
             free(tokens);
         }
+
+        for (size_t i=0; i < PIDS_TO_WAIT_FOR_COUNT; i++){
+            waitpid(PIDS_TO_WAIT_FOR[i], NULL, 0);
+        }
+        PIDS_TO_WAIT_FOR_COUNT = 0;
 
         for (size_t i = 0; i < commands; i++)
         {
@@ -358,6 +369,7 @@ int main(int argc, char *argv[])
         }
         break;
     default:
+        error();
         exit(1);
     }
 
