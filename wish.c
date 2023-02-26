@@ -20,6 +20,7 @@
 #endif
 
 static char *PATH = NULL;
+static bool ERORR_OCCURED = false;
 
 static FILE *input_stream = NULL;
 static FILE *output_stream = NULL;
@@ -30,7 +31,7 @@ static void printTokens(char **tokens, size_t token_count)
     DEBUG_PRINT("token count: %ld \n", token_count);
     for (size_t i = 0; i < token_count; i++)
     {
-        DEBUG_PRINT("token: %s, ", tokens[i]);
+        DEBUG_PRINT("token: '%s', ", tokens[i]);
     }
     DEBUG_PRINT("\n");
 }
@@ -81,11 +82,10 @@ static size_t extractTokens(char *line, char ***tokens_ptr)
     return token_count;
 }
 
-static bool launchApplication(char *app_path, char **tokens, size_t token_count)
+static void launchApplication(char *app_path, char **tokens, size_t token_count)
 {
     // Create args
-    bool should_error = false;
-    char **args = malloc(sizeof(char *) * (token_count+1));
+    char **args = malloc(sizeof(char *) * (token_count + 1));
     for (int i = 0; i < token_count; i++)
     {
         args[i] = (char *)malloc(sizeof(char) * (strlen(tokens[i]) + 1));
@@ -94,20 +94,100 @@ static bool launchApplication(char *app_path, char **tokens, size_t token_count)
     args[token_count] = NULL;
     DEBUG_PRINT("Launched application\n");
     pid_t id = fork();
-    if (id == 0){
+    if (id == 0)
+    {
         execv(app_path, args);
-    } else if (id > 0) {
-        waitpid(id, NULL, 0);
-    } else {
-        should_error = true;
     }
-    //Memory leak if not addressed...
+    else if (id > 0)
+    {
+        waitpid(id, NULL, 0);
+    }
+    else
+    {
+        ERORR_OCCURED = true;
+    }
+    // Memory leak if not addressed...
     for (int i = 0; i < token_count; i++)
     {
         free(args[i]);
     }
     free(args);
-    return should_error;
+}
+
+static void builtInPath(char **tokens, size_t token_count)
+{
+    if (token_count == 1)
+    {
+        // There is are no arguments for pathm clear the path
+        free(PATH);
+        PATH = NULL;
+    }
+    else
+    {
+        // Append onto the existing path
+        // Tokens should already be parsed out
+        for (size_t i = 1; i < token_count; i++)
+        {
+            if (PATH != NULL)
+            {
+                PATH = (char *)realloc(PATH, (strlen(PATH) + strlen(tokens[i]) + 2) * sizeof(char));
+                PATH = strcat(PATH, ":");
+                PATH = strcat(PATH, tokens[i]);
+            }
+            else
+            {
+                PATH = (char *)malloc((strlen(tokens[i]) + 1) * sizeof(char));
+                PATH = strcpy(PATH, tokens[i]);
+            }
+        }
+    }
+
+    DEBUG_PRINT("Path is now set to: %s\n", PATH);
+}
+
+static void builtInCd(char **tokens, size_t token_count)
+{
+    if (token_count == 1 || token_count > 2)
+    {
+        ERORR_OCCURED = true;
+    }
+    int rc = chdir(tokens[1]);
+    if (rc != 0)
+    {
+        ERORR_OCCURED = true;
+    }
+}
+
+static void customCommand(char ** tokens, size_t token_count){
+    char *temp_path = malloc((strlen(PATH) + 1) * sizeof(char));
+    temp_path = strcpy(temp_path, PATH);
+    char *temp_ptr = temp_path;
+    char *single_path = NULL;
+    bool command_ran = false;
+    size_t len_of_token = strlen(tokens[0]);
+    DEBUG_PRINT("len of app token %ld\n", len_of_token);
+    while ((single_path = strsep(&temp_ptr, ":")) != NULL && !command_ran)
+    {
+        // Ignoring if path has been updated yet going to strictly check for bin
+        DEBUG_PRINT("Creating app_path variable\n");
+        size_t len_of_path = strlen(single_path);
+        DEBUG_PRINT("len of PATH %ld\n", len_of_path);
+        // Want to account for / and \0 at end of string so +2
+        char *app_path = (char *)malloc(sizeof(char) * (len_of_path + len_of_token + 2));
+        DEBUG_PRINT("Allocated Memory for App Path \n");
+        strcpy(app_path, single_path);
+        strcat(app_path, "/");
+        strcat(app_path, tokens[0]);
+        DEBUG_PRINT("Created App Path: %s\n", app_path);
+        if (access(app_path, X_OK) == 0)
+        {
+            DEBUG_PRINT("App path exists \n");
+            launchApplication(app_path, tokens, token_count);
+            command_ran = true;
+        }
+        free(app_path);
+    }
+    free(temp_path);
 }
 
 static bool executeCommands(char **tokens, size_t token_count)
@@ -115,71 +195,25 @@ static bool executeCommands(char **tokens, size_t token_count)
     if (token_count == 1 && !strcmp(tokens[0], "exit"))
     {
         return true;
-    } else if (!strcmp(tokens[0], "cd")){
-        if (token_count == 1 || token_count > 2) {
-            error();
-        }
-        int rc = chdir(tokens[1]);
-        if (rc != 0){
-            error();
-        }
-    } else if (!strcmp(tokens[0], "path")){
-        if (token_count == 1) {
-            //There is are no arguments for pathm clear the path
-            free(PATH);
-            PATH = NULL;
-        } else {
-            //Append onto the existing path
-            //Tokens should already be parsed out
-            for (size_t i = 1; i < token_count; i++){
-                if (PATH != NULL) {
-                    PATH = (char *) realloc(PATH, (strlen(PATH)+strlen(tokens[i]) + 2)*sizeof(char));
-                    PATH = strcat(PATH, ":");
-                    PATH = strcat(PATH, tokens[i]);
-                } else {
-                    PATH = (char *) malloc((strlen(tokens[i])+1)*sizeof(char));
-                    PATH = strcpy(PATH, tokens[i]);
-                }
-            }
-        }
-
-        DEBUG_PRINT("Path is now set to: %s\n", PATH);
+    }
+    else if (!strcmp(tokens[0], "cd"))
+    {
+        builtInCd(tokens, token_count);
+    }
+    else if (!strcmp(tokens[0], "path"))
+    {
+        builtInPath(tokens, token_count);
     }
     else
     {
-        char * temp_path = PATH;
-        char * single_path = NULL;
-        bool should_error = true;
-        size_t len_of_token = strlen(tokens[0]);
-        DEBUG_PRINT("len of app token %ld\n", len_of_token);
-        while((single_path = strsep(&temp_path, ":")) != NULL) {
-            // Ignoring if path has been updated yet going to strictly check for bin
-            DEBUG_PRINT("Creating app_path variable\n");
-            size_t len_of_path = strlen(single_path);
-            DEBUG_PRINT("len of PATH %ld\n", len_of_path);
-            // Want to account for / and \0 at end of string so +2
-            char *app_path = (char *)malloc(sizeof(char) * (len_of_path + len_of_token + 2));
-            DEBUG_PRINT("Allocated Memory for App Path \n");
-            strcpy(app_path, single_path);
-            strcat(app_path, "/");
-            strcat(app_path, tokens[0]);
-            DEBUG_PRINT("Created App Path: %s\n", app_path);
-            if (access(app_path, F_OK) == 0)
-            {
-                DEBUG_PRINT("App path exists \n");
-                should_error = launchApplication(app_path,tokens, token_count);
-            }
-            free(app_path);
-        }
-        free(temp_path);
-        if (should_error) error();
+        customCommand(tokens, token_count);
     }
     return false;
 }
 
 static void shellLoop()
 {
-    PATH = (char *) malloc(sizeof(char)*5);
+    PATH = (char *)malloc(sizeof(char) * 5);
     PATH = strcpy(PATH, "/bin");
     printf("wish> ");
     char *line = NULL;
@@ -187,14 +221,14 @@ static void shellLoop()
     size_t len = 0;
     size_t nread = 0;
 
-    while ((nread = getline(&line, &len, input_stream)) != -1)
+    while (!exit_program && !ERORR_OCCURED && (nread = getline(&line, &len, input_stream)) != -1)
     {
         char **tokens = NULL;
         size_t token_count = 0;
         token_count = extractTokens(line, &tokens);
-        #if DEBUG
+#if DEBUG
         printTokens(tokens, token_count);
-        #endif
+#endif
         DEBUG_PRINT("Tokens Generated\n");
         exit_program = executeCommands(tokens, token_count);
         for (int i = 0; i < token_count; i++)
@@ -202,12 +236,13 @@ static void shellLoop()
             free(tokens[i]);
         }
         free(tokens);
-        if (exit_program)
-            break;
     }
 
     free(line);
     free(PATH);
+    if (ERORR_OCCURED) {
+        error();
+    }
     exit(EXIT_SUCCESS);
 }
 
