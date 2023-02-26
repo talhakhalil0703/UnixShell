@@ -7,8 +7,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#define DELIM " "
-#define REDIRECTION_OPERATOR ">"
 #ifdef DEBUG
 #define DEBUG_PRINT(fmt, ...)                \
     do                                       \
@@ -19,11 +17,14 @@
 #define DEBUG_PRINT(fmt, ...)
 #endif
 
-static char *PATH = NULL;
-static bool ERORR_OCCURED = false;
+#define DELIM " "
+#define REDIRECTION_OPERATOR ">"
+#define PARALLEL_OPERATOR "&"
 
-static FILE *input_stream = NULL;
-static FILE *output_stream = NULL;
+static char *PATH = NULL;
+// static bool ERORR_OCCURED = false;
+
+static FILE *INPUT_STREAM = NULL;
 
 #ifdef DEBUG
 static void printTokens(char **tokens, size_t token_count)
@@ -41,7 +42,6 @@ static void error()
 {
     char error_message[30] = "An error has occurred\n";
     write(STDERR_FILENO, error_message, strlen(error_message));
-    exit(1);
 }
 
 /**
@@ -60,28 +60,65 @@ static FILE *_openFile(char *file_name, char *opt)
     return input_file;
 }
 
+static size_t splitCommandsForOperator(char *line, char ***command_lines_ptr, char* op)
+{
+    char **command_lines = *command_lines_ptr;
+    char *single_command = NULL;
+    char *line_ptr = line;
+    size_t commands = 0;
+    while ((single_command = strsep(&line_ptr, op)) != NULL)
+    {
+        commands++;
+        command_lines = realloc(command_lines, sizeof(char *) * commands);
+        command_lines[commands - 1] = malloc(sizeof(char) * (strlen(single_command) + 1));
+        command_lines[commands - 1] = strcpy(command_lines[commands - 1], single_command);
+    }
+
+    free(single_command);
+    *command_lines_ptr = command_lines;
+    return commands;
+}
+
+
 static size_t extractTokens(char *line, char ***tokens_ptr)
 {
     char **tokens = *tokens_ptr;
-    char *line_ptr = line;
-    char *token = NULL;
+    char ** redirection_lines = NULL;
     size_t token_count = 0;
-    while ((token = strsep(&line_ptr, DELIM)) != NULL)
-    {
-        token_count += 1;
-        tokens = (char **)realloc(tokens, sizeof(char *) * (token_count));
-        tokens[token_count - 1] = (char *)malloc(sizeof(char) * strlen(token) + 1);
-        strcpy(tokens[token_count - 1], token);
-        tokens[token_count - 1] = strsep(&tokens[token_count - 1], "\n");
-        tokens[token_count - 1] = strsep(&tokens[token_count - 1], "\t");
-        DEBUG_PRINT("READ TOKEN: %s\n", tokens[token_count - 1]);
+    size_t lines_to_process = splitCommandsForOperator(line, &redirection_lines, REDIRECTION_OPERATOR);
+    for (size_t i = 0; i < lines_to_process; i++){
+        if (!strcmp(redirection_lines[i], "")) continue;
+        char *line_ptr = redirection_lines[i];
+        char *token = NULL;
+        while ((token = strsep(&line_ptr, DELIM)) != NULL)
+        {
+            if (!strcmp(token, "")) continue;
+            token_count += 1;
+            tokens = (char **)realloc(tokens, sizeof(char *) * (token_count));
+            tokens[token_count - 1] = (char *)malloc(sizeof(char) * strlen(token) + 1);
+            strcpy(tokens[token_count - 1], token);
+            tokens[token_count - 1] = strsep(&tokens[token_count - 1], "\n");
+            tokens[token_count - 1] = strsep(&tokens[token_count - 1], "\t");
+            DEBUG_PRINT("READ TOKEN: %s\n", tokens[token_count - 1]);
+        }
+
+        if (i != lines_to_process-1){
+            token_count += 1;
+            tokens = (char **)realloc(tokens, sizeof(char *) * (token_count));
+            tokens[token_count - 1] = (char *)malloc(sizeof(char) * strlen(REDIRECTION_OPERATOR) + 1);
+            strcpy(tokens[token_count - 1], REDIRECTION_OPERATOR);
+        }
+        free(token);
     }
-    free(token);
     *tokens_ptr = tokens;
+    for (size_t i =0; i < lines_to_process; i++){
+        free(redirection_lines[i]);
+    }
+    free(redirection_lines);
     return token_count;
 }
 
-static void launchApplication(char *app_path, char **tokens, size_t token_count, char * output_stream_path)
+static void launchApplication(char *app_path, char **tokens, size_t token_count, char *output_stream_path)
 {
     // Create args
     char **args = malloc(sizeof(char *) * (token_count + 1));
@@ -95,7 +132,8 @@ static void launchApplication(char *app_path, char **tokens, size_t token_count,
     pid_t id = fork();
     if (id == 0)
     {
-        if (output_stream_path != NULL){
+        if (output_stream_path != NULL)
+        {
             freopen(output_stream_path, "w", stdout);
             freopen(output_stream_path, "w", stderr);
         }
@@ -107,7 +145,7 @@ static void launchApplication(char *app_path, char **tokens, size_t token_count,
     }
     else
     {
-        ERORR_OCCURED = true;
+        error();
     }
     // Memory leak if not addressed...
     for (int i = 0; i < token_count; i++)
@@ -152,44 +190,55 @@ static void builtInCd(char **tokens, size_t token_count)
 {
     if (token_count == 1 || token_count > 2)
     {
-        ERORR_OCCURED = true;
+        error();
+        return;
     }
     int rc = chdir(tokens[1]);
     if (rc != 0)
     {
-        ERORR_OCCURED = true;
+        error();
+        return;
     }
 }
 
-static void customCommand(char ** tokens, size_t token_count){
-    //Count the number od redirect operators, if greater than 1 error
+static void customCommand(char **tokens, size_t token_count)
+{
+    if (PATH == NULL) {
+        error();
+        return;
+    }
+    // Count the number od redirect operators, if greater than 1 error
     size_t redirect_count = 0;
     ssize_t redirect_token_pos = token_count;
-    char * redirect_stream_path = NULL;
+    char *redirect_stream_path = NULL;
     for (size_t i = 0; i < token_count; i++)
     {
-        if (!strcmp(tokens[i], REDIRECTION_OPERATOR)){
+        if (!strcmp(tokens[i], REDIRECTION_OPERATOR))
+        {
             redirect_count += 1;
             redirect_token_pos = i;
         }
     }
 
-    if (redirect_count > 1) {
-        ERORR_OCCURED = true;
+    if (redirect_count > 1)
+    {
+        error();
         return;
     }
 
-    if (redirect_token_pos != token_count) {
-        if (redirect_token_pos != token_count-2){
+    if (redirect_token_pos != token_count)
+    {
+        if (redirect_token_pos != token_count - 2)
+        {
             // More than one file on the right side of the redirection operator
-            ERORR_OCCURED = true;
+            error();
             return;
         }
-        redirect_stream_path = tokens[token_count-1];
+        redirect_stream_path = tokens[token_count - 1];
     }
 
-    //Using the count limit the command amount run
-    //Redirect can be done in launcApplication
+    // Using the count limit the command amount run
+    // Redirect can be done in launcApplication
     char *temp_path = malloc((strlen(PATH) + 1) * sizeof(char));
     temp_path = strcpy(temp_path, PATH);
     char *temp_ptr = temp_path;
@@ -218,13 +267,21 @@ static void customCommand(char ** tokens, size_t token_count){
         }
         free(app_path);
     }
+    if (!command_ran)
+    {
+        error();
+    }
     free(temp_path);
 }
 
 static bool executeCommands(char **tokens, size_t token_count)
 {
-    if (token_count == 1 && !strcmp(tokens[0], "exit"))
+    if (!strcmp(tokens[0], "exit"))
     {
+        if (token_count > 1)
+        {
+            error();
+        }
         return true;
     }
     else if (!strcmp(tokens[0], "cd"))
@@ -246,50 +303,62 @@ static void shellLoop()
 {
     PATH = (char *)malloc(sizeof(char) * 5);
     PATH = strcpy(PATH, "/bin");
-    printf("wish> ");
     char *line = NULL;
     bool exit_program = false;
     size_t len = 0;
     size_t nread = 0;
 
-    while (!exit_program && !ERORR_OCCURED && (nread = getline(&line, &len, input_stream)) != -1)
+    while (!exit_program && (nread = getline(&line, &len, INPUT_STREAM)) != -1)
     {
-        char **tokens = NULL;
-        size_t token_count = 0;
-        token_count = extractTokens(line, &tokens);
-#if DEBUG
-        printTokens(tokens, token_count);
-#endif
-        DEBUG_PRINT("Tokens Generated\n");
-        exit_program = executeCommands(tokens, token_count);
-        for (int i = 0; i < token_count; i++)
+        if (INPUT_STREAM == stdin)
+            printf("wish> ");
+        char **command_lines = NULL;
+        size_t commands = splitCommandsForOperator(line, &command_lines, PARALLEL_OPERATOR);
+        for (size_t i = 0; i < commands; i++)
         {
-            free(tokens[i]);
+            char **tokens = NULL;
+            size_t token_count = 0;
+            token_count = extractTokens(command_lines[i], &tokens);
+#if DEBUG
+            printTokens(tokens, token_count);
+#endif
+            DEBUG_PRINT("Tokens Generated\n");
+            exit_program += executeCommands(tokens, token_count);
+            for (int i = 0; i < token_count; i++)
+            {
+                free(tokens[i]);
+            }
+            free(tokens);
         }
-        free(tokens);
-    }
 
+        for (size_t i = 0; i < commands; i++)
+        {
+            free(command_lines[i]);
+        }
+        free(command_lines);
+    }
     free(line);
     free(PATH);
-    if (ERORR_OCCURED) {
-        error();
-    }
     exit(EXIT_SUCCESS);
 }
 
 int main(int argc, char *argv[])
 {
-    input_stream = stdin;
-    output_stream = stdout;
+    INPUT_STREAM = stdin;
 
     switch (argc)
     {
     case 1:
         break;
     case 2:
-        input_stream = _openFile(argv[1], "r");
+        INPUT_STREAM = _openFile(argv[1], "r");
+        if (INPUT_STREAM == NULL)
+        {
+            exit(1);
+        }
+        break;
     default:
-        error();
+        exit(1);
     }
 
     shellLoop();
