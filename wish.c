@@ -94,14 +94,13 @@ static size_t extractTokens(char *line, char ***tokens_ptr)
         char *token = NULL;
         while ((token = strsep(&line_ptr, DELIM)) != NULL)
         {
-            if (!strcmp(token, "") || !strcmp(token, "\n")) continue;
+            if (!strcmp(token, "")) continue;
             token_count += 1;
             tokens = (char **)realloc(tokens, sizeof(char *) * (token_count));
             tokens[token_count - 1] = (char *)malloc(sizeof(char) * strlen(token) + 1);
             strcpy(tokens[token_count - 1], token);
-            tokens[token_count - 1] = strsep(&tokens[token_count - 1], "\n");
             tokens[token_count - 1] = strsep(&tokens[token_count - 1], "\t");
-            DEBUG_PRINT("READ TOKEN: %s\n", tokens[token_count - 1]);
+            DEBUG_PRINT("READ TOKEN: '%s'\n", tokens[token_count - 1]);
         }
 
         if (i != lines_to_process-1){
@@ -140,6 +139,7 @@ static void launchApplication(char *app_path, char **tokens, size_t token_count,
             freopen(output_stream_path, "w", stderr);
         }
         execv(app_path, args);
+        DEBUG_PRINT("I SHOULD NOT BE RETURNING\n");
     }
     else if (id > 0)
     {
@@ -278,16 +278,16 @@ static void customCommand(char **tokens, size_t token_count)
     free(temp_path);
 }
 
-static bool executeCommands(char **tokens, size_t token_count)
+static int executeCommands(char **tokens, size_t token_count)
 {
-    if (token_count == 0) return false;
+    if (token_count == 0) return 0;
     if (!strcmp(tokens[0], "exit"))
     {
         if (token_count > 1)
         {
             error();
         }
-        return true;
+        return 1;
     }
     else if (!strcmp(tokens[0], "cd"))
     {
@@ -301,7 +301,7 @@ static bool executeCommands(char **tokens, size_t token_count)
     {
         customCommand(tokens, token_count);
     }
-    return false;
+    return 0;
 }
 
 static void shellLoop()
@@ -309,14 +309,17 @@ static void shellLoop()
     PATH = (char *)malloc(sizeof(char) * 5);
     PATH = strcpy(PATH, "/bin");
     char *line = NULL;
-    bool exit_program = false;
+    int exit_program = 0;
     size_t len = 0;
     size_t nread = 0;
 
-    while (!exit_program && (nread = getline(&line, &len, INPUT_STREAM)) != -1)
+    if (INPUT_STREAM == stdin)
+        printf("wish> ");
+    int wish_count = 0;
+    while (exit_program == 0 && (nread = getline(&line, &len, INPUT_STREAM)) != -1)
     {
-        if (INPUT_STREAM == stdin)
-            printf("wish> ");
+        line[strlen(line)-1] = '\0';
+        DEBUG_PRINT("Running '%s'\n,", line);
         char **command_lines = NULL;
         size_t commands = splitCommandsForOperator(line, &command_lines, PARALLEL_OPERATOR);
         for (size_t i = 0; i < commands; i++)
@@ -347,6 +350,11 @@ static void shellLoop()
             free(command_lines[i]);
         }
         free(command_lines);
+
+        if (INPUT_STREAM == stdin && exit_program == 0) {
+            wish_count++;
+            printf("wish> ");
+        }
     }
     free(line);
     free(PATH);
